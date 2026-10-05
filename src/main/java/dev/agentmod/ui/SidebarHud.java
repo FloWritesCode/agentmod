@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import dev.agentmod.AgentModConfig;
 import dev.agentmod.core.AgentHub;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
@@ -126,7 +127,7 @@ public final class SidebarHud implements HudElement {
 
 	/** Handles a click while the chat screen is open. Returns true if the click hit the sidebar. */
 	public boolean handleClick(double guiX, double guiY, int button) {
-		if (button != 0) {
+		if (button != InputConstants.MOUSE_BUTTON_LEFT) {
 			return false;
 		}
 		for (Hit hit : hits) {

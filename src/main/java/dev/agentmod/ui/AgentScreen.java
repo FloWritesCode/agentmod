@@ -590,7 +590,7 @@ public final class AgentScreen extends Screen {
 
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-		if (event.button() == 0 && event.x() < listW) {
+		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && event.x() < listW) {
 			for (ListHit hit : listHits) {
 				if (hit.contains(event.x(), event.y())) {
 					select(hit.key());
