@@ -1,0 +1,25 @@
+{
+	"schemaVersion": 1,
+	"id": "agentmod",
+	"version": "${version}",
+	"name": "AgentMod",
+	"description": "See and talk to your Cursor and Codex agents without leaving Minecraft.",
+	"authors": ["FloWritesCode"],
+	"contact": {
+		"homepage": "https://github.com/FloWritesCode/agentmod",
+		"sources": "https://github.com/FloWritesCode/agentmod",
+		"issues": "https://github.com/FloWritesCode/agentmod/issues"
+	},
+	"license": "MIT",
+	"icon": "assets/agentmod/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["dev.agentmod.AgentModClient"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

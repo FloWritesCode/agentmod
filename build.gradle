@@ -1,0 +1,66 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+base {
+	archivesName = project.name
+}
+
+loom {
+	mods {
+		"agentmod" {
+			sourceSet sourceSets.main
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	useJUnitPlatform()
+	// ./gradlew test -Dagentmod.live=true also runs the read-only probe against your real Cursor and Codex data.
+	def live = System.getProperty('agentmod.live', 'false')
+	systemProperty 'agentmod.live', live
+	inputs.property 'agentmod.live', live
+	testLogging {
+		showStandardStreams = live == 'true'
+		exceptionFormat = 'full'
+	}
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = "UTF-8"
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+// Copies the built jar into the vanilla launcher's mods folder: ./gradlew installMod
+def modsDir = file("${System.getProperty('user.home')}/Library/Application Support/minecraft/mods")
+tasks.register('installMod', Copy) {
+	from tasks.named('jar')
+	into modsDir
+	doFirst {
+		modsDir.mkdirs()
+		modsDir.listFiles({ File f -> f.name.startsWith('agentmod-') && f.name.endsWith('.jar') } as FileFilter)?.each { it.delete() }
+	}
+}
