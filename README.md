@@ -42,7 +42,7 @@ See what's running, read what your agents did, and reply to them without leaving
 
 ### Requirements
 
-| | |
+| What | Version |
 | --- | --- |
 | Minecraft | Java Edition **26.3** |
 | Mod loader | [Fabric Loader](https://fabricmc.net/use/installer/) **0.19.5** or newer |
