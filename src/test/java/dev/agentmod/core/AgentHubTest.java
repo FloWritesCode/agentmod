@@ -99,4 +99,18 @@ class AgentHubTest {
 		}
 		assertTrue(Files.exists(dir.resolve("seen.json")));
 	}
+
+	@Test
+	void mergesProjectsAcrossApps() {
+		List<ProjectChoice> cursor = List.of(
+				new ProjectChoice("AgentMod", "/Users/me/Developer/AgentMod", 500),
+				new ProjectChoice("", "/Users/me/Developer/Old/", 0));
+		List<ProjectChoice> codex = List.of(
+				new ProjectChoice("agentmod", "/Users/me/Developer/./AgentMod", 900),
+				new ProjectChoice("Bien", "/Users/me/Developer/Bien", 700));
+		assertEquals(List.of(
+				new ProjectChoice("AgentMod", "/Users/me/Developer/AgentMod", 900),
+				new ProjectChoice("Bien", "/Users/me/Developer/Bien", 700),
+				new ProjectChoice("Old", "/Users/me/Developer/Old", 0)), AgentHub.mergeProjects(List.of(cursor, codex)));
+	}
 }

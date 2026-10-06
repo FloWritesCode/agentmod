@@ -25,6 +25,7 @@ import dev.agentmod.util.ShellEnv;
  */
 final class CursorStateDb {
 	private static final Pattern SAFE_ID = Pattern.compile("[A-Za-z0-9_-]{1,80}");
+	private static final Pattern SAFE_ITEM_KEY = Pattern.compile("[A-Za-z0-9_./-]{1,120}");
 
 	private final Path dbPath;
 	private final Path sqlite;
@@ -93,6 +94,18 @@ final class CursorStateDb {
 				+ "WHERE c.key = 'composerData:" + composerId + "' "
 				+ "ORDER BY idx DESC LIMIT " + Math.max(1, limit) + ") ORDER BY idx ASC;";
 		return query(sql);
+	}
+
+	/** Raw values of Cursor's global key-value settings ({@code ItemTable}), one row per key that exists. */
+	List<JsonObject> items(String... keys) throws IOException {
+		List<String> quoted = new ArrayList<>();
+		for (String key : keys) {
+			if (!SAFE_ITEM_KEY.matcher(key).matches()) {
+				throw new IOException("Unexpected setting key: " + key);
+			}
+			quoted.add("'" + key + "'");
+		}
+		return query("SELECT key, CAST(value AS TEXT) AS value FROM ItemTable WHERE key IN (" + String.join(", ", quoted) + ");");
 	}
 
 	private List<JsonObject> query(String sql) throws IOException {

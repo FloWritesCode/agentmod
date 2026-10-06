@@ -1,12 +1,16 @@
 package dev.agentmod.core;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
@@ -54,11 +58,19 @@ public final class AgentHub implements AutoCloseable {
 	public record Notification(NotificationKind kind, AgentSummary agent) {
 	}
 
+	/** A backend the new-agent form can start agents with. */
+	public record Launcher(AgentSource source, String label, String hint, List<AgentMode> modes, boolean needsSignIn) {
+	}
+
+	private static final int MAX_PROJECTS = 40;
+
 	private final AgentModConfig config;
 	private final List<AgentBackend> backends;
 	private final SeenStore seen;
 	private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(r -> Thread.ofPlatform().daemon().name("AgentMod-poll").unstarted(r));
 	private final ExecutorService workers = Executors.newFixedThreadPool(3, r -> Thread.ofPlatform().daemon().name("AgentMod-worker").unstarted(r));
+	/** Starting agents and signing in can take minutes (browser login), so they don't share the workers. */
+	private final ExecutorService launches = Executors.newCachedThreadPool(r -> Thread.ofPlatform().daemon().name("AgentMod-launch").unstarted(r));
 	private final Map<AgentSource, List<AgentSummary>> latest = new ConcurrentHashMap<>();
 	private final Map<AgentSource, String> lastErrors = new ConcurrentHashMap<>();
 	private final Map<String, AgentStatus> previousStatus = new HashMap<>();
@@ -136,6 +148,96 @@ public final class AgentHub implements AutoCloseable {
 		return this.<ReplyResult>async(key, (backend, id) -> backend.resolveAction(id, actionId, optionId))
 				.exceptionally(e -> ReplyResult.failed(rootMessage(e)))
 				.whenComplete((r, e) -> requestRefresh());
+	}
+
+	public List<Launcher> launchers() {
+		List<Launcher> out = new ArrayList<>();
+		for (AgentBackend backend : backends) {
+			if (backend.canStartAgents()) {
+				out.add(new Launcher(backend.source(), backend.startLabel(), backend.startHint(), backend.agentModes(), backend.needsSignIn()));
+			}
+		}
+		return out;
+	}
+
+	public CompletableFuture<StartResult> startAgent(AgentSource source, NewAgentRequest request) {
+		AgentBackend backend = backendFor(source.keyPrefix());
+		if (backend == null) {
+			return CompletableFuture.completedFuture(StartResult.failed(source.displayName() + " is disabled"));
+		}
+		return CompletableFuture.supplyAsync(() -> {
+			try {
+				return backend.startAgent(request);
+			} catch (Exception e) {
+				throw new CompletionException(e);
+			}
+		}, launches).exceptionally(e -> StartResult.failed(rootMessage(e))).whenComplete((result, e) -> {
+			if (result != null && result.ok() && result.agent() != null) {
+				seen.markSeen(result.agent().key(), System.currentTimeMillis());
+			}
+			changes.incrementAndGet();
+			requestRefresh();
+		});
+	}
+
+	public CompletableFuture<ReplyResult> signIn(AgentSource source) {
+		AgentBackend backend = backendFor(source.keyPrefix());
+		if (backend == null) {
+			return CompletableFuture.completedFuture(ReplyResult.failed(source.displayName() + " is disabled"));
+		}
+		return CompletableFuture.supplyAsync(() -> {
+			try {
+				return backend.signIn();
+			} catch (Exception e) {
+				throw new CompletionException(e);
+			}
+		}, launches).exceptionally(e -> ReplyResult.failed(rootMessage(e))).whenComplete((r, e) -> requestRefresh());
+	}
+
+	/** Folders known to any agent app that still exist, most recently used first. */
+	public CompletableFuture<List<ProjectChoice>> recentProjects() {
+		return CompletableFuture.supplyAsync(() -> {
+			List<List<ProjectChoice>> lists = new ArrayList<>();
+			for (AgentBackend backend : backends) {
+				try {
+					lists.add(backend.recentProjects());
+				} catch (Exception e) {
+					LOG.debug("[AgentMod] {} projects unavailable: {}", backend.source().displayName(), e.toString());
+				}
+			}
+			List<ProjectChoice> merged = mergeProjects(lists);
+			merged.removeIf(project -> !Files.isDirectory(Path.of(project.path())));
+			return merged.size() > MAX_PROJECTS ? List.copyOf(merged.subList(0, MAX_PROJECTS)) : merged;
+		}, workers);
+	}
+
+	/** Dedupes by normalized path (keeping the newest use and the first non-blank name), newest first. */
+	static List<ProjectChoice> mergeProjects(List<List<ProjectChoice>> lists) {
+		Map<String, ProjectChoice> byPath = new LinkedHashMap<>();
+		for (List<ProjectChoice> list : lists) {
+			for (ProjectChoice project : list) {
+				if (project == null || project.path() == null || project.path().isBlank()) {
+					continue;
+				}
+				String path;
+				try {
+					path = Path.of(project.path()).toAbsolutePath().normalize().toString();
+				} catch (Exception e) {
+					continue;
+				}
+				ProjectChoice existing = byPath.get(path);
+				String name = existing != null && existing.name() != null && !existing.name().isBlank() ? existing.name() : project.name();
+				if (name == null || name.isBlank()) {
+					Path fileName = Path.of(path).getFileName();
+					name = fileName != null ? fileName.toString() : path;
+				}
+				long lastUsed = Math.max(project.lastUsedAt(), existing != null ? existing.lastUsedAt() : 0);
+				byPath.put(path, new ProjectChoice(name, path, lastUsed));
+			}
+		}
+		List<ProjectChoice> merged = new ArrayList<>(byPath.values());
+		merged.sort(Comparator.comparingLong(ProjectChoice::lastUsedAt).reversed());
+		return merged;
 	}
 
 	private interface BackendCall<T> {
@@ -293,6 +395,7 @@ public final class AgentHub implements AutoCloseable {
 	public void close() {
 		poller.shutdownNow();
 		workers.shutdownNow();
+		launches.shutdownNow();
 		for (AgentBackend backend : backends) {
 			try {
 				backend.close();

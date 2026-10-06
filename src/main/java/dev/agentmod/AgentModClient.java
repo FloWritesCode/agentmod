@@ -10,6 +10,7 @@ import dev.agentmod.core.AgentBackend;
 import dev.agentmod.core.AgentHub;
 import dev.agentmod.core.SeenStore;
 import dev.agentmod.cursor.CursorBackend;
+import dev.agentmod.cursor.CursorCliBackend;
 import dev.agentmod.ui.AgentScreen;
 import dev.agentmod.ui.SidebarHud;
 import dev.agentmod.util.Texts;
@@ -57,10 +58,14 @@ public final class AgentModClient implements ClientModInitializer {
 		List<AgentBackend> backends = new ArrayList<>();
 		if (config.cursor.enabled) {
 			backends.add(new CursorBackend(config.cursor));
+			if (config.cursor.cliEnabled) {
+				backends.add(new CursorCliBackend(config.cursor, version));
+			}
 		}
 		if (config.codex.enabled) {
 			backends.add(new CodexBackend(config.codex, version));
-		}		hub = new AgentHub(config, backends, new SeenStore(configDir.resolve("agentmod-seen.json")));
+		}
+		hub = new AgentHub(config, backends, new SeenStore(configDir.resolve("agentmod-seen.json")));
 		hub.start();
 
 		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "agents"));

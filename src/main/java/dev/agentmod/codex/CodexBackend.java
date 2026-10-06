@@ -22,8 +22,11 @@ import dev.agentmod.core.AgentSummary;
 import dev.agentmod.core.BackendHealth;
 import dev.agentmod.core.ChatMessage;
 import dev.agentmod.core.Conversation;
+import dev.agentmod.core.NewAgentRequest;
 import dev.agentmod.core.PendingAction;
+import dev.agentmod.core.ProjectChoice;
 import dev.agentmod.core.ReplyResult;
+import dev.agentmod.core.StartResult;
 import dev.agentmod.util.Json;
 import dev.agentmod.util.ShellEnv;
 import dev.agentmod.util.Texts;
@@ -35,7 +38,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Replies go to the Codex desktop app when it has the thread open, so the turn shows up there live.
  * Otherwise the thread is resumed in our own app-server and the turn runs from Minecraft; command and
- * file-change approvals for those turns are surfaced in the agent window.
+ * file-change approvals for those turns are surfaced in the agent window. New threads started from
+ * Minecraft run the same way.
  */
 public final class CodexBackend implements AgentBackend {
 	private static final Logger LOG = LoggerFactory.getLogger("AgentMod");
@@ -55,6 +59,8 @@ public final class CodexBackend implements AgentBackend {
 	private final CodexDesktopIpc ipc = new CodexDesktopIpc();
 	private final Map<String, ThreadState> states = new ConcurrentHashMap<>();
 	private final Map<String, Approval> approvals = new ConcurrentHashMap<>();
+	/** Working folder of every listed thread → its newest update (ms), for the new-agent project list. */
+	private final Map<String, Long> threadFolders = new ConcurrentHashMap<>();
 	private final ExecutorService background = Executors.newSingleThreadExecutor(r -> Thread.ofPlatform().daemon().name("AgentMod-codex-bg").unstarted(r));
 	private volatile Runnable changeListener = () -> {
 	};
@@ -163,6 +169,10 @@ public final class CodexBackend implements AgentBackend {
 				long updatedSec = Json.lng(thread, 0, "updatedAt");
 				long updatedMs = updatedSec * 1000;
 				ThreadState state = states.computeIfAbsent(id, k -> new ThreadState());
+				String cwd = Json.str(thread, "cwd");
+				if (cwd != null && !cwd.isBlank()) {
+					threadFolders.merge(cwd, updatedMs, Math::max);
+				}
 
 				boolean recent = now - updatedMs < ACTIVE_WINDOW_MS;
 				boolean changedSinceCheck = state.checkedUpdatedAt != updatedSec;
@@ -197,7 +207,7 @@ public final class CodexBackend implements AgentBackend {
 						id,
 						Texts.oneLine(title),
 						Texts.truncate(Texts.oneLine(subtitle), 200),
-						Texts.baseName(Json.str(thread, "cwd")),
+						Texts.baseName(cwd),
 						status,
 						updatedMs,
 						false,
@@ -408,7 +418,7 @@ public final class CodexBackend implements AgentBackend {
 		if (message.isEmpty()) {
 			return ReplyResult.failed("Nothing to send");
 		}
-		JsonArray input = Json.array(Json.object("type", "text", "text", message, "text_elements", new JsonArray()));
+		JsonArray input = textInput(message);
 		ThreadState state = states.computeIfAbsent(id, k -> new ThreadState());
 
 		String activeTurn = state.activeTurnId;
@@ -450,6 +460,91 @@ public final class CodexBackend implements AgentBackend {
 		state.turnStatus = "inProgress";
 		changed();
 		return ReplyResult.ok("Sent. Codex is working on it from Minecraft");
+	}
+
+	private static JsonArray textInput(String message) {
+		return Json.array(Json.object("type", "text", "text", message, "text_elements", new JsonArray()));
+	}
+
+	@Override
+	public boolean canStartAgents() {
+		return server != null;
+	}
+
+	@Override
+	public String startHint() {
+		return "Runs in Codex from Minecraft, with your Codex settings and approvals. The thread also shows up in the Codex app; it stops if you quit the game mid-turn.";
+	}
+
+	@Override
+	public StartResult startAgent(NewAgentRequest request) throws Exception {
+		if (server == null) {
+			return StartResult.failed("Codex CLI not found");
+		}
+		String prompt = request.prompt() == null ? "" : request.prompt().strip();
+		if (prompt.isEmpty()) {
+			return StartResult.failed("Write a first message for the agent");
+		}
+		JsonObject started = server.call("thread/start", Json.object("cwd", request.projectPath()), Duration.ofSeconds(60));
+		String threadId = Json.str(started, "thread", "id");
+		if (threadId == null) {
+			return StartResult.failed("Codex didn't create a thread");
+		}
+		ThreadState state = states.computeIfAbsent(threadId, k -> new ThreadState());
+		state.loadedHere = true;
+		JsonObject turn = server.call("turn/start", Json.object("threadId", threadId, "input", textInput(prompt)), Duration.ofSeconds(30));
+		String turnId = Json.str(turn, "turn", "id");
+		if (turnId != null) {
+			state.activeTurnId = turnId;
+		}
+		state.turnStatus = "inProgress";
+		long now = System.currentTimeMillis();
+		threadFolders.merge(request.projectPath(), now, Math::max);
+		changed();
+		AgentSummary agent = new AgentSummary(AgentSource.CODEX, threadId, Texts.truncate(Texts.firstLine(prompt), 90), "",
+				Texts.baseName(request.projectPath()), AgentStatus.RUNNING, now, false, true, REPLY_HINT);
+		return StartResult.ok("Codex is working on it", agent);
+	}
+
+	@Override
+	public List<ProjectChoice> recentProjects() {
+		List<ProjectChoice> projects = new ArrayList<>();
+		Path globalState = codexHome().resolve(".codex-global-state.json");
+		if (Files.isRegularFile(globalState)) {
+			try {
+				projects.addAll(desktopProjects(Json.parseObject(Files.readString(globalState))));
+			} catch (Exception e) {
+				LOG.debug("[AgentMod] Couldn't read Codex projects: {}", e.toString());
+			}
+		}
+		threadFolders.forEach((folder, updatedAt) -> projects.add(new ProjectChoice(Texts.baseName(folder), folder, updatedAt)));
+		return projects;
+	}
+
+	private static Path codexHome() {
+		String override = System.getenv("CODEX_HOME");
+		return override != null && !override.isBlank() ? Path.of(override) : Path.of(System.getProperty("user.home"), ".codex");
+	}
+
+	/** The Codex app's sidebar projects ({@code local-projects} in its global state). */
+	static List<ProjectChoice> desktopProjects(JsonObject state) {
+		List<ProjectChoice> projects = new ArrayList<>();
+		JsonObject local = Json.obj(state, "local-projects");
+		if (local == null) {
+			return projects;
+		}
+		for (String id : local.keySet()) {
+			JsonObject project = Json.obj(local, id);
+			JsonArray roots = Json.arr(project, "rootPaths");
+			if (roots == null || roots.isEmpty() || !roots.get(0).isJsonPrimitive()) {
+				continue;
+			}
+			String root = roots.get(0).getAsString();
+			String name = Json.str(project, "name");
+			long usedAt = Math.max(Json.lng(project, 0, "updatedAt"), Json.lng(project, 0, "createdAt"));
+			projects.add(new ProjectChoice(name != null && !name.isBlank() ? name : Texts.baseName(root), root, usedAt));
+		}
+		return projects;
 	}
 
 	@Override

@@ -1,5 +1,6 @@
 package dev.agentmod.cursor;
 
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -7,10 +8,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.agentmod.AgentModConfig;
 import dev.agentmod.core.AgentBackend;
 import dev.agentmod.core.AgentSource;
@@ -19,6 +24,7 @@ import dev.agentmod.core.AgentSummary;
 import dev.agentmod.core.BackendHealth;
 import dev.agentmod.core.ChatMessage;
 import dev.agentmod.core.Conversation;
+import dev.agentmod.core.ProjectChoice;
 import dev.agentmod.core.ReplyResult;
 import dev.agentmod.util.Json;
 import dev.agentmod.util.Texts;
@@ -29,6 +35,8 @@ import dev.agentmod.util.Texts;
  */
 public final class CursorBackend implements AgentBackend {
 	static final String ENABLE_BRIDGE_HINT = "To reply, enable Cursor Settings → Beta → Desktop Bridge";
+	private static final String GLASS_PROJECTS_KEY = "cursor/glass.additionalProjects";
+	private static final String RECENT_PATHS_KEY = "history.recentlyOpenedPathsList";
 	private static final long STALE_RUN_MS = 3 * 60 * 60 * 1000L;
 	private static final int MAX_BUBBLES = 400;
 	private static final Pattern FIRST_STRING_FIELD = Pattern.compile("\"(command|targetFile|target_file|path|relativeWorkspacePath|file_path|filePath|pattern|query|searchTerm|search_term|url|glob_pattern|globPattern|description|toolName)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)");
@@ -37,6 +45,8 @@ public final class CursorBackend implements AgentBackend {
 	private final AgentModConfig.Cursor config;
 	private final CursorStateDb db;
 	private final DesktopBridge bridge = new DesktopBridge();
+	/** Workspace folder of every listed chat → its newest update (ms), for the new-agent project list. */
+	private final Map<String, Long> chatFolders = new ConcurrentHashMap<>();
 	private volatile BackendHealth health = new BackendHealth(AgentSource.CURSOR, false, "Starting…");
 
 	public CursorBackend(AgentModConfig.Cursor config) {
@@ -101,7 +111,11 @@ public final class CursorBackend implements AgentBackend {
 				status = AgentStatus.WAITING;
 			}
 			String title = name != null && !name.isBlank() ? name : liveThread != null && liveThread.title() != null ? liveThread.title() : "Untitled chat";
-			String project = Texts.baseName(Json.str(header, "workspaceIdentifier", "uri", "fsPath"));
+			String folder = Json.str(header, "workspaceIdentifier", "uri", "fsPath");
+			if (folder != null && !folder.isBlank()) {
+				chatFolders.merge(folder, updatedAt, Math::max);
+			}
+			String project = Texts.baseName(folder);
 			if ("cloud".equals(Json.str(header, "agentLocation", "type"))) {
 				project = project.isEmpty() ? "cloud" : project + " (cloud)";
 			}
@@ -208,6 +222,64 @@ public final class CursorBackend implements AgentBackend {
 			case "timeout" -> ReplyResult.failed("Cursor didn't respond in time");
 			default -> ReplyResult.failed("Cursor: " + (outcome.detail() != null ? outcome.detail() : outcome.status()));
 		};
+	}
+
+	/** The Cursor app's sidebar projects, recently opened folders and the folders of recent chats. */
+	@Override
+	public List<ProjectChoice> recentProjects() throws Exception {
+		List<ProjectChoice> projects = new ArrayList<>();
+		if (!db.available()) {
+			return projects;
+		}
+		for (JsonObject row : db.items(GLASS_PROJECTS_KEY, RECENT_PATHS_KEY)) {
+			String value = Json.str(row, "value");
+			if (GLASS_PROJECTS_KEY.equals(Json.str(row, "key"))) {
+				projects.addAll(glassProjects(value));
+			} else {
+				projects.addAll(recentFolders(value));
+			}
+		}
+		chatFolders.forEach((folder, updatedAt) -> projects.add(new ProjectChoice(Texts.baseName(folder), folder, updatedAt)));
+		return projects;
+	}
+
+	static List<ProjectChoice> glassProjects(String json) {
+		List<ProjectChoice> projects = new ArrayList<>();
+		if (json == null || json.isBlank()) {
+			return projects;
+		}
+		JsonElement parsed = JsonParser.parseString(json);
+		if (!parsed.isJsonArray()) {
+			return projects;
+		}
+		for (JsonElement element : parsed.getAsJsonArray()) {
+			String path = Json.str(element, "workspaceIdentifier", "uri", "fsPath");
+			if (path != null && !path.isBlank()) {
+				projects.add(new ProjectChoice(Json.str(element, "name"), path, Json.lng(element, 0, "lastUsedAt")));
+			}
+		}
+		return projects;
+	}
+
+	static List<ProjectChoice> recentFolders(String json) {
+		List<ProjectChoice> projects = new ArrayList<>();
+		JsonArray entries = Json.arr(json == null || json.isBlank() ? null : Json.parseObject(json), "entries");
+		if (entries == null) {
+			return projects;
+		}
+		for (JsonElement entry : entries) {
+			String uri = Json.str(entry, "folderUri");
+			if (uri == null || !uri.startsWith("file:")) {
+				continue;
+			}
+			try {
+				String path = Path.of(URI.create(uri)).toString();
+				projects.add(new ProjectChoice(Texts.baseName(path), path, 0));
+			} catch (Exception ignored) {
+				// Not a local folder.
+			}
+		}
+		return projects;
 	}
 
 	@Override

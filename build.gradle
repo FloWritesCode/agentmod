@@ -29,8 +29,12 @@ test {
 	def live = System.getProperty('agentmod.live', 'false')
 	systemProperty 'agentmod.live', live
 	inputs.property 'agentmod.live', live
+	// -Dagentmod.liveStart=codex (or cursor) really starts a tiny agent in a scratch folder under build/.
+	def liveStart = System.getProperty('agentmod.liveStart', '')
+	systemProperty 'agentmod.liveStart', liveStart
+	inputs.property 'agentmod.liveStart', liveStart
 	testLogging {
-		showStandardStreams = live == 'true'
+		showStandardStreams = live == 'true' || !liveStart.isEmpty()
 		exceptionFormat = 'full'
 	}
 }

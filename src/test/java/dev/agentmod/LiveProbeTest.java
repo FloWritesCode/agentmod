@@ -7,6 +7,7 @@ import dev.agentmod.core.AgentBackend;
 import dev.agentmod.core.AgentSummary;
 import dev.agentmod.core.ChatMessage;
 import dev.agentmod.core.Conversation;
+import dev.agentmod.core.ProjectChoice;
 import dev.agentmod.cursor.CursorBackend;
 import dev.agentmod.util.Texts;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,8 @@ class LiveProbeTest {
 			System.out.printf("  %-9s %5s  %-40s | %-14s | %s%n", agent.status(), Texts.ago(agent.updatedAt(), now),
 					Texts.truncate(agent.title(), 40), Texts.truncate(agent.project(), 14), Texts.truncate(agent.subtitle(), 70));
 		}
+		List<ProjectChoice> projects = backend.recentProjects();
+		System.out.printf("  %d project folders: %s%n", projects.size(), projects.stream().limit(8).map(ProjectChoice::path).toList());
 		if (agents.isEmpty()) {
 			return;
 		}

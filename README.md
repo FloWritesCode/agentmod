@@ -6,7 +6,7 @@
 
 **Your Cursor and Codex agents, inside Minecraft.**
 
-See what's running, read what your agents did, and reply to them without leaving your world.
+See what's running, read what your agents did, reply to them and start new ones without leaving your world.
 
 [![Minecraft 26.3](https://img.shields.io/badge/Minecraft-26.3-62B47A?style=flat-square)](https://www.minecraft.net)
 [![Fabric Loader](https://img.shields.io/badge/Fabric_Loader-0.19.5+-DBD0B4?style=flat-square)](https://fabricmc.net)
@@ -23,7 +23,8 @@ See what's running, read what your agents did, and reply to them without leaving
 - **Live sidebar** on the left edge of your screen. It lists agents that are running or need you, unread results, and anything that finished in the last 20 minutes.
 - **Agent window** with the full conversation: your messages, the agent's replies (with Markdown) and every tool call it made.
 - **Reply from the game.** Messages go straight to the Cursor or Codex agent.
-- **Approve Codex commands** with Allow / Deny buttons when a turn needs permission.
+- **Start new agents** in Cursor or Codex. Pick a project folder from the ones you use in either app (or browse to any folder), choose Agent, Plan or Ask for Cursor, and write the first message.
+- **Approve commands** with Allow / Deny buttons when an agent started or resumed from the game needs permission.
 - **Notifications:** a toast and a chime when an agent finishes, fails or needs your input.
 - **Local only.** The mod reads your agents from this computer and makes no network requests of its own.
 
@@ -69,6 +70,8 @@ See what's running, read what your agents did, and reply to them without leaving
 
 5. **Let the mod reply to Cursor agents (optional).** In Cursor, open **Settings → Beta → Desktop Bridge** and turn on **"Allow CLI to access desktop agents"**. Without it, Cursor agents are read-only in the game. Codex needs no setup.
 
+6. **Sign in to start Cursor agents (optional).** New Cursor agents run in Cursor's CLI agent, which comes with Cursor but needs its own one-time sign-in. In the game, press <kbd>J</kbd>, click **+ New**, choose **Cursor** and click **Sign in**; finish in your browser. Running `cursor-agent login` in a terminal does the same. Starting Codex agents needs no setup.
+
 ## Usage
 
 ### Controls
@@ -76,6 +79,7 @@ See what's running, read what your agents did, and reply to them without leaving
 | Key | Action |
 | --- | --- |
 | <kbd>J</kbd> | Open or close the agent window |
+| <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + <kbd>N</kbd>, or **+ New** | Start a new agent (in the agent window) |
 | <kbd>H</kbd> | Show or hide the sidebar |
 | <kbd>T</kbd>, then click a card | Open that agent from the sidebar (the chat frees your mouse) |
 | <kbd>Enter</kbd> | Send your reply |
@@ -104,16 +108,33 @@ Finished agents stay in the sidebar for 20 minutes, and unread ones for up to 48
 
 Press <kbd>J</kbd> to see every agent from the last 14 days, grouped into **Active**, **Unread** and **Recent**. Select one to read the conversation. Tool calls appear as dimmed one-line summaries, and long runs of them are collapsed. The status of each connection is shown at the bottom of the list.
 
+### Starting a new agent
+
+Click **+ New** at the top of the agent list (or press <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + <kbd>N</kbd>), then:
+
+1. **Choose Cursor or Codex.**
+2. **Choose the project folder.** The list holds the projects you use in Cursor and Codex, newest first. Type to filter it, paste a folder path, or click **Browse…** to pick any folder.
+3. **Choose a mode** (Cursor only): **Agent** edits files and runs commands, **Plan** researches and writes a plan before changing anything, **Ask** answers questions without changing files.
+4. **Write the first message** and press <kbd>Enter</kbd> or click **Start agent**. Double-clicking a project also starts.
+
+The agent window then switches to the new conversation, and the agent shows up in the sidebar like any other.
+
+- **Codex** agents start as a new thread with your Codex settings, so they also appear in the Codex app. The turn runs from Minecraft and stops if you quit the game while it's working.
+- **Cursor** agents run in Cursor's CLI agent with your Cursor account, models, rules and permission settings. They're listed as **Cursor CLI** in the game. Cursor's own sidebar doesn't show them, so you continue them from the game.
+
 ### Replying
 
 Type in the box at the bottom and press <kbd>Enter</kbd>. Where the message goes depends on the agent:
 
 - **Cursor:** the message is delivered through Cursor's Desktop Bridge to the open chat, as if you'd typed it there. If the agent is busy, Cursor queues it. The chat has to be open in a Cursor window.
+- **Cursor CLI** (agents started from the game): the message goes to the same Cursor CLI agent. If it's still working, the message waits and is sent when the turn ends.
 - **Codex:** if the Codex app has the thread open, your message goes to the app and the turn shows up there live. Otherwise AgentMod resumes the thread in its own Codex session and runs the turn from Minecraft. That turn stops if you quit the game.
 
 ### Approvals
 
 When a Codex turn that AgentMod started wants to run a command or edit files, the agent turns amber and the window shows the request with **Allow**, **Allow for session**, **Deny** and **Deny & stop** buttons. Turns running in the Codex app keep asking for approval in the app as usual.
+
+Cursor CLI agents ask the same way whenever your Cursor permission settings require it, with **Allow**, **Always allow**, **Reject** and **Stop**.
 
 ## Configuration
 
@@ -137,6 +158,8 @@ AgentMod creates `config/agentmod.json` in your Minecraft folder the first time 
 | `cursor.enabled` | `true` | Show Cursor agents |
 | `cursor.stateDbPath` | auto | Path to Cursor's `state.vscdb` |
 | `cursor.sqlitePath` | auto | Path to the `sqlite3` binary |
+| `cursor.cliEnabled` | `true` | Start new Cursor agents with Cursor's CLI agent, and list the ones it runs |
+| `cursor.cliBinaryPath` | auto | Path to `cursor-agent` (default: `~/.local/bin`, then your `PATH`, then the copy bundled with Cursor) |
 | `codex.enabled` | `true` | Show Codex agents |
 | `codex.binaryPath` | auto | Path to `codex` (default: the one bundled with the Codex app, then your `PATH`) |
 | `codex.includeExecThreads` | `false` | Also list non-interactive `codex exec` runs |
@@ -155,16 +178,18 @@ flowchart LR
     end
     hub -- "sqlite3 -readonly" --> db[("Cursor state.vscdb")]
     hub -- "Desktop Bridge" --> cursor[Cursor]
+    hub -- "ACP over stdio" --> cli[cursor-agent acp]
     hub -- "JSON-RPC over stdio" --> server[codex app-server]
     hub -- "local IPC socket" --> app[Codex app]
 ```
 
-| | Agents and status | Conversation | Replies |
-| --- | --- | --- | --- |
-| **Cursor** | Cursor's local state database, opened read-only | Same database | Cursor's Desktop Bridge |
-| **Codex** | A private `codex app-server` started by the mod | Same app-server | The Codex app when it has the thread open, otherwise the app-server |
+| | Agents and status | Conversation | Replies | New agents |
+| --- | --- | --- | --- | --- |
+| **Cursor** | Cursor's local state database, opened read-only | Same database | Cursor's Desktop Bridge | (see Cursor CLI) |
+| **Cursor CLI** | The CLI's session folder (`~/.cursor/acp-sessions`) | Replayed by `cursor-agent acp` | Same process | `cursor-agent acp`, one process per agent, started in the project folder |
+| **Codex** | A private `codex app-server` started by the mod | Same app-server | The Codex app when it has the thread open, otherwise the app-server | `thread/start` in the project folder on the same app-server |
 
-All of this happens on your computer. AgentMod never changes Cursor's database. When Minecraft quits, it shuts down the `codex app-server` it started.
+All of this happens on your computer. AgentMod never changes Cursor's database. A Cursor CLI process stops after a few idle minutes and starts again when it's needed. When Minecraft quits, AgentMod shuts down every `codex app-server` and `cursor-agent` process it started.
 
 ## Troubleshooting
 
@@ -184,6 +209,18 @@ Turn on **Cursor Settings → Beta → Desktop Bridge → "Allow CLI to access d
 <summary><b>"No open Cursor window has this chat"</b></summary>
 
 Cursor can only deliver messages to chats that are open in a window. Open the chat in Cursor once, then send again.
+</details>
+
+<details>
+<summary><b>"Not signed in" for Cursor CLI, or Start agent is greyed out</b></summary>
+
+Cursor's CLI agent has its own sign-in. Click **+ New → Cursor → Sign in** and finish in your browser, or run `cursor-agent login` in a terminal. The game notices a terminal sign-in within about 15 seconds.
+</details>
+
+<details>
+<summary><b>"Cursor's CLI agent not found"</b></summary>
+
+AgentMod looks for `cursor-agent` in `~/.local/bin`, on your `PATH`, and inside Cursor's own install. Install the standalone CLI with `curl https://cursor.com/install -fsS | bash`, or set `cursor.cliBinaryPath` in `config/agentmod.json`.
 </details>
 
 <details>
@@ -210,16 +247,16 @@ cd agentmod
 ./gradlew installMod   # copies the jar into the macOS launcher's mods folder
 ```
 
-`./gradlew test -Dagentmod.live=true` also prints what the backends see on your computer, without sending anything.
+`./gradlew test -Dagentmod.live=true` also prints what the backends see on your computer, without sending anything. `./gradlew test -Dagentmod.liveStart=codex` (or `cursor`) really starts a tiny agent in `build/live-start` and checks its reply.
 
 The code is in `src/main/java/dev/agentmod`:
 
 | Package | Contents |
 | --- | --- |
-| `cursor/` | Cursor backend: state database reader and Desktop Bridge client |
+| `cursor/` | Cursor backend (state database reader and Desktop Bridge client) and Cursor CLI backend (ACP client and session store) |
 | `codex/` | Codex backend: app-server client and Codex app IPC client |
-| `core/` | `AgentHub` (polling, unread tracking, notifications) and shared models |
-| `ui/` | Sidebar, agent window, transcript and Markdown rendering |
+| `core/` | `AgentHub` (polling, unread tracking, notifications, starting agents) and shared models |
+| `ui/` | Sidebar, agent window, new-agent screen, transcript and Markdown rendering |
 
 ## Platform support
 

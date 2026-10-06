@@ -41,6 +41,10 @@ public final class AgentModConfig {
 		/** Override for the sqlite3 binary; empty means auto-detect. */
 		public String sqlitePath = "";
 		public int maxAgents = 60;
+		/** Start new Cursor agents from Minecraft with Cursor's CLI agent, and list the ones it runs. */
+		public boolean cliEnabled = true;
+		/** Override for the {@code cursor-agent} binary; empty means the standalone CLI, else the copy bundled with Cursor. */
+		public String cliBinaryPath = "";
 	}
 
 	public static final class Codex {

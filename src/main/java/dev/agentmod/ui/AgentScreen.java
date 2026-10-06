@@ -10,6 +10,7 @@ import java.util.concurrent.CompletableFuture;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.agentmod.AgentModClient;
 import dev.agentmod.core.AgentHub;
+import dev.agentmod.core.AgentSource;
 import dev.agentmod.core.AgentStatus;
 import dev.agentmod.core.AgentSummary;
 import dev.agentmod.core.BackendHealth;
@@ -32,6 +33,7 @@ public final class AgentScreen extends Screen {
 	private static final int LIST_HEADER = 22;
 	private static final int HEADER_H = 34;
 	private static final int SEND_W = 50;
+	private static final int NEW_W = 42;
 	private static final long ACTIVE_RELOAD_MS = 1500;
 	private static final long IDLE_RELOAD_MS = 6000;
 	private static final long ECHO_TTL_MS = 10 * 60_000;
@@ -61,6 +63,7 @@ public final class AgentScreen extends Screen {
 
 	private MultiLineEditBox input;
 	private Button sendButton;
+	private Button newButton;
 	private PendingAction shownAction;
 	private List<FormattedCharSequence> actionLines = List.of();
 	private String status;
@@ -76,17 +79,26 @@ public final class AgentScreen extends Screen {
 	private int actionTop;
 	private int transcriptBottom;
 
-	private AgentScreen(AgentHub hub, String initialKey) {
+	private AgentScreen(AgentHub hub, String initialKey, AgentSummary placeholder) {
 		super(Component.literal("Agents"));
 		this.hub = hub;
 		this.selectedKey = initialKey != null ? initialKey : pickDefault(hub.snapshot());
+		this.selectedSummary = placeholder;
 	}
 
 	/** Opens the agent window, optionally focused on one agent ({@code null} picks the most relevant one). */
 	public static void open(String key) {
+		open(key, null);
+	}
+
+	/** Opens the agent window on an agent the hub may not list yet (one that was just started). */
+	public static void open(String key, AgentSummary placeholder) {
 		AgentHub hub = AgentModClient.hub();
 		if (hub != null) {
-			Minecraft.getInstance().gui.setScreen(new AgentScreen(hub, key));
+			if (key != null) {
+				lastSelectedKey = key;
+			}
+			Minecraft.getInstance().gui.setScreen(new AgentScreen(hub, key, placeholder));
 		}
 	}
 
@@ -138,6 +150,11 @@ public final class AgentScreen extends Screen {
 		sendButton = addRenderableWidget(Button.builder(Component.literal("Send"), b -> send())
 				.bounds(panelX + panelW - 8 - SEND_W, inputY + inputH - 20, SEND_W, 20)
 				.build());
+
+		newButton = addRenderableWidget(Button.builder(Component.literal("+ New"), b -> NewAgentScreen.open(hub, this))
+				.bounds(8 + font.width("Agents") + 8, 3, NEW_W, 16)
+				.build());
+		newButton.active = !hub.launchers().isEmpty();
 
 		actionButtons.clear();
 		PendingAction action = shownAction;
@@ -216,10 +233,9 @@ public final class AgentScreen extends Screen {
 		return selectedSummary;
 	}
 
-	private static dev.agentmod.core.AgentSource sourceOf(String key) {
-		return key.startsWith(dev.agentmod.core.AgentSource.CURSOR.keyPrefix() + ":")
-				? dev.agentmod.core.AgentSource.CURSOR
-				: dev.agentmod.core.AgentSource.CODEX;
+	private static AgentSource sourceOf(String key) {
+		AgentSource source = AgentSource.fromKey(key);
+		return source != null ? source : AgentSource.CODEX;
 	}
 
 	/** Sent messages show up immediately, until the backend's history contains them. */
@@ -401,9 +417,14 @@ public final class AgentScreen extends Screen {
 
 	private void drawList(GuiGraphicsExtractor g, AgentHub.Snapshot snapshot, int mouseX, int mouseY, long now) {
 		g.text(font, "Agents", 8, 8, Theme.TEXT, false);
-		String keyName = AgentModClient.openKeyName();
-		String hint = keyName + " / Esc to close";
-		g.text(font, Theme.ellipsize(font, hint, listW - 60), listW - 6 - font.width(Theme.ellipsize(font, hint, listW - 60)), 8, Theme.TEXT_FAINT, false);
+		String hint = AgentModClient.openKeyName() + " / Esc to close";
+		int hintLeft = newButton.getX() + newButton.getWidth() + 6;
+		if (font.width(hint) > listW - 6 - hintLeft) {
+			hint = "Esc";
+		}
+		if (font.width(hint) <= listW - 6 - hintLeft) {
+			g.text(font, hint, listW - 6 - font.width(hint), 8, Theme.TEXT_FAINT, false);
+		}
 
 		List<BackendHealth> health = snapshot.health();
 		int healthTop = height - 6 - health.size() * 11;
@@ -456,6 +477,9 @@ public final class AgentScreen extends Screen {
 		if (content == 0) {
 			String empty = snapshot.loaded() ? "No agents yet" : "Looking for agents…";
 			g.centeredText(font, empty, listW / 2, top + 20, Theme.TEXT_FAINT);
+			if (snapshot.loaded() && newButton.active) {
+				g.centeredText(font, Theme.ellipsize(font, "Press + New to start one", listW - 12), listW / 2, top + 32, Theme.TEXT_FAINT);
+			}
 		}
 	}
 
@@ -548,6 +572,10 @@ public final class AgentScreen extends Screen {
 			send();
 			return true;
 		}
+		if (key == InputConstants.KEY_N && event.hasControlDownWithQuirk() && newButton.active) {
+			NewAgentScreen.open(hub, this);
+			return true;
+		}
 		if (key == InputConstants.KEY_PAGEUP || key == InputConstants.KEY_PAGEDOWN) {
 			int page = Math.max(20, transcript.viewHeight() - 20);
 			transcript.scrollBy(key == InputConstants.KEY_PAGEUP ? -page : page);
@@ -590,7 +618,7 @@ public final class AgentScreen extends Screen {
 
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && event.x() < listW) {
+		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && event.x() < listW && event.y() >= LIST_HEADER) {
 			for (ListHit hit : listHits) {
 				if (hit.contains(event.x(), event.y())) {
 					select(hit.key());
